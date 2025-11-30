@@ -1,6 +1,6 @@
-from edits import Edit, BRIGHTNESS, CONTRAST, SATURATION, FILTER
-from history import EditHistory
-from apply_edits import load_image, save_image, apply_edits_sequence
+from src.edits import Edit, BRIGHTNESS, CONTRAST, SATURATION, FILTER
+from src.history import EditHistory
+from src.apply_edits import load_image, save_image, apply_edits_sequence
 
 def main():
     base_path = "example.jpg"
