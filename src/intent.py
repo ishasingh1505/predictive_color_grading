@@ -10,25 +10,38 @@ from .branching import render_slide_image
 
 # --- Tone state ---------------------------------------------------------
 
+from typing import Optional
+
 @dataclass
 class ToneState:
     brightness: float
     contrast: float
+    lut_id: Optional[str] = None
+    lut_strength: float = 0.0
 
+
+
+from .edits import Edit, BRIGHTNESS, CONTRAST, FILTER
 
 def compute_tone_state(edits: List[Edit]) -> ToneState:
-    """
-    Walk through edits and extract final brightness/contrast values.
-    """
-    state = ToneState(brightness=0.0, contrast=1.0)
+    state = ToneState(
+        brightness=0.0,
+        contrast=1.0,
+        lut_id=None,
+        lut_strength=0.0,
+    )
 
     for e in edits:
         if e.type == BRIGHTNESS:
             state.brightness = e.params["value"]
         elif e.type == CONTRAST:
             state.contrast = e.params["value"]
+        elif e.type == FILTER:  # treat FILTER as LUT
+            state.lut_id = e.params.get("id")
+            state.lut_strength = e.params.get("strength", 1.0)
 
     return state
+
 
 
 # --- Low-res helper -----------------------------------------------------
@@ -60,12 +73,12 @@ def make_lowres(img: np.ndarray, target_long_side: int = TARGET_LONG_SIDE) -> np
 # --- Intent vector ------------------------------------------------------
 
 def compute_intent_vector(state_S: ToneState, state_F: ToneState) -> np.ndarray:
-    """
-    Build a simple intent vector: [Δbrightness, Δcontrast]
-    """
-    d_brightness = state_F.brightness - state_S.brightness
-    d_contrast = state_F.contrast - state_S.contrast
-    return np.array([d_brightness, d_contrast], dtype=np.float32)
+    d_brightness  = state_F.brightness   - state_S.brightness
+    d_contrast    = state_F.contrast     - state_S.contrast
+    d_lut_strength = state_F.lut_strength - state_S.lut_strength
+
+    return np.array([d_brightness, d_contrast, d_lut_strength], dtype=np.float32)
+
 
 
 # --- High-level prep for AI --------------------------------------------
