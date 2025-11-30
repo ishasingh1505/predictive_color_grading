@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List
 from .edits import Edit
+MAX_EDITS = 10 
 
 @dataclass
 class EditHistory:
@@ -9,6 +10,8 @@ class EditHistory:
 
     def add_edit(self, edit: Edit):
         self.edits.append(edit)
+        if len(self.edits) > MAX_EDITS:
+            self.edits.pop(0)  # drop oldest
 
     def get_edits_after_index(self, idx: int):
         return self.edits[idx + 1 :]
