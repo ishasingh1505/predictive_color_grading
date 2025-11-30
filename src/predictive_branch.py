@@ -6,16 +6,17 @@ from .ai_client import optimise_tone_colour
 from .apply_edits import apply_brightness, apply_contrast
 
 
-def apply_ai_params_fullres(img_full: np.ndarray,
-                            params: Dict[str, float]) -> np.ndarray:
-    """
-    Apply AI-suggested brightness + contrast to FULL-RES image.
-    TEMP: simple direct operations (no LUT yet).
-    """
-    out = img_full.copy()
-    out = apply_brightness(out, params["brightness"])
-    out = apply_contrast(out, params["contrast"])
+def apply_ai_params_fullres(img, ai_params):
+    out = img.copy()
+    out = apply_brightness(out, ai_params["brightness"])
+    out = apply_contrast(out, ai_params["contrast"])
+
+    # You will integrate real LUT model later.
+    # For now, LUT does nothing but code path is ready.
+    _ = ai_params.get("lut_strength", 0.0)
+
     return out
+
 
 
 def run_predictive_branch(history, slide_index: int):
