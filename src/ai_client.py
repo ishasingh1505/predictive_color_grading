@@ -2,6 +2,7 @@ import os
 import base64
 import json
 from typing import Dict
+from .apply_edits import apply_brightness, apply_contrast
 
 import numpy as np
 import requests  # you can stub this out in tests if needed
@@ -26,52 +27,69 @@ def _encode_image_to_base64(img: np.ndarray) -> str:
 def optimise_tone_colour(lowres_image: np.ndarray,
                          intent_vector: np.ndarray) -> Dict[str, float]:
     """
-    Core AI call wrapper.
-
-    Input:
-      - lowres_image: np.ndarray float32 [0,1], (H, W, 3)
-      - intent_vector: np.ndarray float32, e.g. [Δbrightness, Δcontrast]
-
-    Output (contract is FIXED):
-      {
-        "brightness": float,   # recommended brightness delta or value
-        "contrast": float,     # recommended contrast delta or value
-      }
-
-    For now, this can be a STUB that just echoes intent or does something simple.
-    Later, you point this to Modal.com or any other server by just changing URL.
+    Now uses:
+      - candidate generation
+      - heuristic scoring on low-res image
     """
-    # --- STUB IMPLEMENTATION (no real server yet) ---
-    # For now, just echo the user intent as-is:
-    d_brightness = float(intent_vector[0])
-    d_contrast   = float(intent_vector[1])
+    candidates = _generate_candidates(intent_vector)
+
+    best_score = -1e9
+    best_cand = candidates[0]
+
+    for cand in candidates:
+        score = _score_candidate(lowres_image, cand)
+        if score > best_score:
+            best_score = score
+            best_cand = cand
 
     return {
-        "brightness": d_brightness,
-        "contrast":   d_contrast,
+        "brightness": float(best_cand["brightness"]),
+        "contrast":   float(best_cand["contrast"]),
     }
 
-    # ------------- REAL IMPLEMENTATION LATER -------------
-    # Example shape for future:
-    #
-    # api_url = os.environ.get("AI_API_URL")
-    # api_key = os.environ.get("AI_API_KEY")
-    #
-    # payload = {
-    #     "image_base64": _encode_image_to_base64(lowres_image),
-    #     "intent_vector": intent_vector.tolist(),
-    # }
-    #
-    # headers = {
-    #     "Authorization": f"Bearer {api_key}",
-    #     "Content-Type": "application/json",
-    # }
-    #
-    # resp = requests.post(api_url, headers=headers, data=json.dumps(payload), timeout=10)
-    # resp.raise_for_status()
-    # data = resp.json()
-    #
-    # return {
-    #     "brightness": float(data["brightness"]),
-    #     "contrast":   float(data["contrast"]),
-    # }
+
+
+def _generate_candidates(intent_vector: np.ndarray) -> list[dict]:
+    """
+    From [Δb, Δc], create a small set of candidate (brightness, contrast) deltas.
+    """
+    d_b, d_c = float(intent_vector[0]), float(intent_vector[1])
+
+    # scales around the user's delta
+    scales = [0.5, 0.75, 1.0, 1.25, 1.5]
+
+    candidates = []
+    for s in scales:
+        cand_b = d_b * s
+        cand_c = d_c * s
+
+        # clamp to safe ranges (tune later)
+        cand_b = max(-0.5, min(0.5, cand_b))
+        cand_c = max(-0.5, min(0.5, cand_c))
+
+        candidates.append({"brightness": cand_b, "contrast": cand_c})
+
+    return candidates
+
+
+def _score_candidate(lowres_image: np.ndarray, cand: dict) -> float:
+    """
+    Very simple heuristic:
+      - apply brightness+contrast
+      - compute mean + std of luminance
+      - prefer mid-brightness (~0.5) and moderate contrast (std ~0.2–0.3)
+    """
+    img = lowres_image.copy()
+    img = apply_brightness(img, cand["brightness"])
+    img = apply_contrast(img, cand["contrast"])
+
+    # luminance approx
+    y = 0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2]
+    mean = float(y.mean())
+    std = float(y.std())
+
+    # want mean near 0.5, std near 0.25
+    score_brightness = 1.0 - abs(mean - 0.5)  # closer to 0.5 is better
+    score_contrast   = 1.0 - abs(std  - 0.25)
+
+    return score_brightness + score_contrast  # rough combo
