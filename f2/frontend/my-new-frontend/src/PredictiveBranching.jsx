@@ -55,10 +55,15 @@ export default function PredictiveBranching() {
       return;
     }
 
+    // 1. Calculate a dynamic change or use input (Simulating user moving slider to +20 brightness)
+    // currently hardcoded to 194 in your code, let's make it relative to current
+    const currentBrightness = history[slideIndex]?.state?.brightness || 100;
+    const newBrightness = currentBrightness + 20; // Example: User increased brightness
+
     // Generate new state for brightness and contrast updates
     const newState = {
-      ...history[history.length - 1].state,
-      brightness: 194, // Apply change
+      ...history[slideIndex].state,
+      brightness: newBrightness,
       contrast: 100,
       saturation: 100,
       blur: 0,
@@ -71,20 +76,29 @@ export default function PredictiveBranching() {
       selectedLUT: null
     };
 
-    // Update history with new state
-    setHistory([
-      ...history,
-      {
+    const newHistoryEntry = {
         state: newState,
         index: history.length,
         label: `Brightness: ${newState.brightness}%`,
         timestamp: Date.now(),
         isCurrent: true,
-      },
-    ]);
+    };
 
-    // Generate predictive branch using updated history
-    const { aiImage, aiParams, userFutureImage } = runPredictiveBranch(history, slideIndex);
+    // If we are branching from the middle, we might want to slice history or add as a new path
+    // For this demo, simply appending:
+    const updatedHistory = [...history.slice(0, slideIndex + 1), newHistoryEntry];
+    
+    setHistory(updatedHistory);
+    // Update the slide index to the new tip
+    const newSlideIndex = updatedHistory.length - 1;
+    setSlideIndex(newSlideIndex);
+
+    // 2. PASS baseImageData explicitly to the core function
+    const { aiImage, aiParams, userFutureImage } = runPredictiveBranch(
+       updatedHistory, 
+       newSlideIndex, 
+       baseImageData // <--- IMPORTANT FIX
+    );
 
     console.log("AI params:", aiParams);
 

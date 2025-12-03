@@ -3,6 +3,55 @@ import React, { useState, useRef } from "react";
 import * as ort from "onnxruntime-web";
 
 // ------------------------------
+// Detail Preservation Helper
+// ------------------------------
+
+/**
+ * Combines high-resolution detail (luminance) from original image
+ * with color information from low-res AI output.
+ * This prevents the low-res upscale from looking blurry.
+ */
+function combineHighResDetailWithLowResColor(highRes, lowRes) {
+  // 1. Create canvas for high-res original
+  const cvsH = document.createElement("canvas");
+  cvsH.width = highRes.width;
+  cvsH.height = highRes.height;
+  const ctxH = cvsH.getContext("2d");
+  ctxH.putImageData(highRes, 0, 0);
+
+  // 2. Create canvas for low-res AI output
+  const cvsL = document.createElement("canvas");
+  cvsL.width = lowRes.width;
+  cvsL.height = lowRes.height;
+  const ctxL = cvsL.getContext("2d");
+  ctxL.putImageData(lowRes, 0, 0);
+
+  // 3. Use "color" blending mode to apply AI colors onto original details
+  ctxH.globalCompositeOperation = "color";
+  ctxH.imageSmoothingEnabled = true;
+  ctxH.imageSmoothingQuality = "high";
+  
+  // Draw scaled low-res onto high-res canvas
+  ctxH.drawImage(
+    cvsL, 
+    0, 0, lowRes.width, lowRes.height,
+    0, 0, highRes.width, highRes.height
+  );
+
+  // 4. Optional: Apply subtle luminosity pass if AI significantly changes lighting
+  // This takes 40% of the AI's lighting changes
+  ctxH.globalCompositeOperation = "luminosity";
+  ctxH.globalAlpha = 0.4;
+  ctxH.drawImage(
+    cvsL, 
+    0, 0, lowRes.width, lowRes.height,
+    0, 0, highRes.width, highRes.height
+  );
+
+  return cvsH.toDataURL("image/png");
+}
+
+// ------------------------------
 // NeurOP ONNX helpers (module-scope)
 // ------------------------------
 
@@ -205,6 +254,7 @@ export default function PredictiveDemo() {
   };
 
   // BUTTON HANDLER – currently: just run NeurOP on base image
+  // BUTTON HANDLER
   const handleRunPredictive = async () => {
     if (!baseImageData) {
       alert("Load an image first.");
@@ -212,7 +262,7 @@ export default function PredictiveDemo() {
     }
 
     try {
-      // simple history update, like before
+      // History update logic (kept same as your code)
       const newState = {
         ...history[history.length - 1].state,
         brightness: 50,
@@ -232,25 +282,25 @@ export default function PredictiveDemo() {
       setHistory(newHistory);
       setSlideIndex(newHistory.length - 1);
 
-      const aiImageData = await runNeuropOnnx(baseImageData);
+      // 1) Run NeurOP ONNX on the base image
+      const aiImageData = await runNeuropOnnx(baseImageData); // Returns 256x256 ImageData
 
-      // AI preview
-      const aiCanvas = document.createElement("canvas");
-      aiCanvas.width = aiImageData.width;
-      aiCanvas.height = aiImageData.height;
-      const aiCtx = aiCanvas.getContext("2d");
-      aiCtx.putImageData(aiImageData, 0, 0);
-      setAiUrl(aiCanvas.toDataURL("image/png"));
+      // ---------------------------------------------------------
+      // DETAIL PRESERVATION FIX: Blend AI colors with original details
+      // ---------------------------------------------------------
+      const aiUrl = combineHighResDetailWithLowResColor(baseImageData, aiImageData);
+      setAiUrl(aiUrl);
 
-      // User future = original (for now)
+      // Show the user’s future (original image) for comparison
       const ufCanvas = document.createElement("canvas");
       ufCanvas.width = baseImageData.width;
       ufCanvas.height = baseImageData.height;
       const ufCtx = ufCanvas.getContext("2d");
       ufCtx.putImageData(baseImageData, 0, 0);
       setUserFutureUrl(ufCanvas.toDataURL("image/png"));
+
     } catch (err) {
-      console.error("runPredictiveBranch / NeurOP failed:", err);
+      console.error("runPredictiveBranch failed:", err);
       alert("NeurOP inference failed. Check console for details.");
     }
   };
