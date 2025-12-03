@@ -60,6 +60,25 @@ export function applyContrast(imageData, value) {
   return out;
 }
 
+export function applySaturation(imageData, value) {
+  const out = new ImageData(imageData.width, imageData.height);
+  const data = imageData.data;
+  const outData = out.data;
+  const shift = value; // value between -1 (grayscale) and +1 (super saturated)
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i+1], b = data[i+2];
+    // Simple luminance
+    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+    
+    outData[i]   = clampByte(gray + (r - gray) * (1 + shift));
+    outData[i+1] = clampByte(gray + (g - gray) * (1 + shift));
+    outData[i+2] = clampByte(gray + (b - gray) * (1 + shift));
+    outData[i+3] = data[i+3];
+  }
+  return out;
+}
+
 // =========================
 // Apply edit sequence (full-res)
 // =========================
@@ -95,42 +114,47 @@ export function addEditToHistory(history, edit) {
   history.edits.push(edit);
 }
 
-export function renderSlideImage(history, slideIndex) {
-  console.log("Rendering image at slideIndex:", slideIndex);
-  console.log("History at slideIndex:", history[slideIndex]);
-
-  const base = history[slideIndex]?.state?.baseImage; // Ensure baseImage is part of the state object
+export function renderSlideImage(history, slideIndex, globalBaseImage = null) {
+  // Try to find image in history state first
+  const historyBase = history[slideIndex]?.state?.baseImage;
+  
+  // Use history base, or fallback to the global base passed in
+  const base = historyBase || globalBaseImage;
 
   if (!base) {
     console.error("No base image found for slide index:", slideIndex);
-    return null; // Return null if base image is missing
+    return null;
   }
 
+  // In a real app, you would re-apply edits from index 0 to slideIndex here
+  // For now, we return the base assuming the history stores full images or we are at index 0
   return base;
 }
 
 
 
 export function getFutureEdits(history, slideIndex) {
-  // Support two history shapes:
-  // 1) { baseImage, edits: [...] }  (legacy)
-  // 2) [ { state: {...} }, { state: {...} }, ... ] (UI-driven)
   if (!history) return [];
 
-  // If history is an object with an edits array, use that
+  // 1. Legacy object shape
   if (!Array.isArray(history) && Array.isArray(history.edits)) {
     return history.edits.slice(slideIndex + 1);
   }
 
-  // If history is an array, there's no edits array to slice — return empty by default
+  // 2. UI-driven Array shape (FIXED)
   if (Array.isArray(history)) {
-    // Optionally, attempt to collect edits from entries if they exist
-    // but by default return an empty future edits list to avoid crashes.
-    console.warn("getFutureEdits: history is array-shaped; returning empty futureEdits");
-    return [];
+    // We look at states *after* the current slideIndex
+    const futureStates = history.slice(slideIndex + 1);
+    
+    // Convert these states into "edits" (deltas) if possible, 
+    // or simply return the state objects if your app handles state-based replay.
+    // For this specific predictive logic, we usually need to know what changed.
+    // Ideally, your history items should store the 'edit' that caused the state.
+    
+    // If your system applies absolute states, returning the states is enough:
+    return futureStates; 
   }
 
-  // Fallback: safe empty
   return [];
 }
 
@@ -194,20 +218,11 @@ function downscaleImageData(img, maxSize) {
   return dctx.getImageData(0, 0, w, h);
 }
 
-export function prepareAiInputs(history, slideIndex, lowResMaxSize = 256) {
-  // Ensure history is an array and slideIndex is valid
-  if (!Array.isArray(history) || history.length === 0) {
-    console.error("History is empty or not an array!");
-    return {}; // Return an empty object to avoid destructuring errors
-  }
+export function prepareAiInputs(history, slideIndex, lowResMaxSize = 256, baseImageData = null) {
+  if (!Array.isArray(history) || history.length === 0) return {};
 
-  if (slideIndex < 0 || slideIndex >= history.length) {
-    console.error("Invalid slideIndex:", slideIndex);
-    return {}; // Return an empty object to avoid destructuring errors
-  }
-
-  // Retrieve the image at the slideIndex
-  const branchFull = renderSlideImage(history, slideIndex);
+  // Pass the baseImageData to renderSlideImage
+  const branchFull = renderSlideImage(history, slideIndex, baseImageData);
 
   if (!branchFull) {
     console.error("Failed to render branch image");
@@ -253,6 +268,7 @@ export function generateCandidates(intentVector) {
   const brightnessScales = [0.5, 0.75, 1.0, 1.25];
   const contrastScales = [0.5, 0.75, 1.0, 1.25];
   const lutScales = [0.5, 0.75, 1.0, 1.25]; // Modify LUT strength here
+  const saturationOptions = [-0.2, 0.0, 0.2, 0.4]; // Try slightly desaturated to vibrant
 
   const candidates = [];
 
@@ -266,34 +282,37 @@ export function generateCandidates(intentVector) {
   for (const sb of brightnessScales) {
     for (const sc of contrastScales) {
       for (const sl of lutScales) {
-        let candB = dB * sb;
-        let candC = dC * sc;
-        let candL = dL * sl;
+        for (const sat of saturationOptions) {
+          let candB = dB * sb;
+          let candC = dC * sc;
+          let candL = dL * sl;
 
-        // Apply clamping based on LUT, brightness, and contrast constraints
-        candB = clamp(candB, -0.5, 0.5);
-        candC = clamp(candC, -0.5, 0.5);
-        candL = clamp(candL, -0.5, 0.5);
+          // Apply clamping based on LUT, brightness, and contrast constraints
+          candB = clamp(candB, -0.5, 0.5);
+          candC = clamp(candC, -0.5, 0.5);
+          candL = clamp(candL, -0.5, 0.5);
 
-        // Ensure LUT remains consistent with the user's intention (same sign or zero)
-        candB = sameSignOrZero(candB, dB);
-        candC = sameSignOrZero(candC, dC);
-        candL = sameSignOrZero(candL, dL);
+          // Ensure LUT remains consistent with the user's intention (same sign or zero)
+          candB = sameSignOrZero(candB, dB);
+          candC = sameSignOrZero(candC, dC);
+          candL = sameSignOrZero(candL, dL);
 
-        candidates.push({
-          brightness: candB,
-          contrast: candC,
-          lut_strength: candL,  // Now including LUT strength
-        });
+          candidates.push({
+            brightness: candB,
+            contrast: candC,
+            lut_strength: candL,  // Now including LUT strength
+            saturation: sat // Store saturation
+          });
+        }
       }
     }
   }
 
-  // De-duplicate candidates based on brightness, contrast, and LUT strength
+  // De-duplicate candidates based on brightness, contrast, LUT strength, and saturation
   const seen = new Set();
   const unique = [];
   for (const c of candidates) {
-    const key = `${c.brightness.toFixed(4)}_${c.contrast.toFixed(4)}_${c.lut_strength.toFixed(4)}`;
+    const key = `${c.brightness.toFixed(4)}_${c.contrast.toFixed(4)}_${c.lut_strength.toFixed(4)}_${c.saturation.toFixed(4)}`;
     if (!seen.has(key)) {
       seen.add(key);
       unique.push(c);
@@ -324,6 +343,11 @@ function applyChosenParams(img, cand, lutId) {
   let out = applyBrightness(img, cand.brightness);
   out = applyContrast(out, cand.contrast);
 
+  // Apply Saturation
+  if (cand.saturation !== 0) {
+    out = applySaturation(out, cand.saturation);
+  }
+
   if (lutId) {
     const finalStrength = clamp(0.5 + cand.lut_strength, 0, 1);
     out = applyLut(out, lutId, finalStrength);
@@ -336,15 +360,15 @@ function applyChosenParams(img, cand, lutId) {
  * High-level entry point (client-side):
  * Equivalent of Python run_predictive_branch
  */
-export function runPredictiveBranch(history, slideIndex) {
-  // provide safe defaults from prepareAiInputs to avoid runtime errors
+export function runPredictiveBranch(history, slideIndex, baseImageData) { // <--- Added param
+  // Pass baseImageData down to prepareAiInputs
   const {
     branchFull,
     branchLow,
     intentVector = [0, 0, 0],
     futureEdits = [],
     lutId = null,
-  } = prepareAiInputs(history, slideIndex);
+  } = prepareAiInputs(history, slideIndex, 256, baseImageData); // <--- Pass it here
 
   // Guard if images weren't produced
   if (!branchFull || !branchLow) {
